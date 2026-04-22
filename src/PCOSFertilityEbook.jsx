@@ -74,16 +74,89 @@ const CHAPTERS = [
   { id: "ch8", title: "Ch 8: 30-Day Plan", icon: "📋" },
 ];
 
+// ── Persistence helpers ──────────────────────────────────────────
+const LS_TYPE_KEY = "pcos_ebook_type";
+const LS_CHAPTER_KEY = "pcos_ebook_chapter";
+const LS_COMPLETED_KEY = "pcos_ebook_completed";
+
+function saveToStorage(type, chapter, completed) {
+  try {
+    localStorage.setItem(LS_TYPE_KEY, type);
+    localStorage.setItem(LS_CHAPTER_KEY, chapter);
+    localStorage.setItem(LS_COMPLETED_KEY, JSON.stringify([...completed]));
+  } catch (e) {}
+}
+
+function loadFromStorage() {
+  try {
+    const type = localStorage.getItem(LS_TYPE_KEY);
+    const chapter = localStorage.getItem(LS_CHAPTER_KEY) || "intro";
+    const completed = new Set(JSON.parse(localStorage.getItem(LS_COMPLETED_KEY) || "[]"));
+    return { type, chapter, completed };
+  } catch (e) {
+    return { type: null, chapter: "intro", completed: new Set() };
+  }
+}
+
+function getTypeFromURL() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("type");
+    return PCOS_TYPES[t] ? t : null;
+  } catch (e) { return null; }
+}
+
+function setTypeInURL(type) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("type", type);
+    window.history.replaceState({}, "", url.toString());
+  } catch (e) {}
+}
+
+function clearURL() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("type");
+    window.history.replaceState({}, "", url.toString());
+  } catch (e) {}
+}
+
 export default function PCOSEbook() {
   const width = useWindowWidth();
   const isMobile = width < 768;
-  const [screen, setScreen] = useState("cover");
+
+  // ── Boot: check URL first, then localStorage ──────────────────
+  const getInitialState = () => {
+    const urlType = getTypeFromURL();
+    if (urlType) {
+      const { chapter, completed } = loadFromStorage();
+      return { screen: "chapter", pcosType: urlType, activeChapter: chapter, completedChapters: completed };
+    }
+    const { type, chapter, completed } = loadFromStorage();
+    if (type) {
+      return { screen: "chapter", pcosType: type, activeChapter: chapter, completedChapters: completed };
+    }
+    return { screen: "cover", pcosType: null, activeChapter: "intro", completedChapters: new Set() };
+  };
+
+  const init = getInitialState();
+
+  const [screen, setScreen] = useState(init.screen);
   const [quizStep, setQuizStep] = useState(0);
   const [scores, setScores] = useState({ insulin: 0, adrenal: 0, inflammatory: 0, postPill: 0 });
-  const [pcosType, setPcosType] = useState(null);
-  const [activeChapter, setActiveChapter] = useState("intro");
+  const [pcosType, setPcosType] = useState(init.pcosType);
+  const [activeChapter, setActiveChapter] = useState(init.activeChapter);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [completedChapters, setCompletedChapters] = useState(new Set());
+  const [completedChapters, setCompletedChapters] = useState(init.completedChapters);
+
+  // ── Save to localStorage + URL whenever key state changes ─────
+  useEffect(() => {
+    if (pcosType) {
+      saveToStorage(pcosType, activeChapter, completedChapters);
+      setTypeInURL(pcosType);
+    }
+  }, [pcosType, activeChapter, completedChapters]);
 
   const handleAnswer = (optionScores) => {
     const newScores = { ...scores };
@@ -99,7 +172,23 @@ export default function PCOSEbook() {
   };
 
   const enterEbook = () => { setScreen("chapter"); setActiveChapter("intro"); };
-  const markComplete = (id) => setCompletedChapters(new Set([...completedChapters, id]));
+
+  const markComplete = (id) => {
+    const updated = new Set([...completedChapters, id]);
+    setCompletedChapters(updated);
+  };
+
+  // ── Retake quiz: clears everything ───────────────────────────
+  const retakeQuiz = () => {
+    try { localStorage.removeItem(LS_TYPE_KEY); localStorage.removeItem(LS_CHAPTER_KEY); localStorage.removeItem(LS_COMPLETED_KEY); } catch (e) {}
+    clearURL();
+    setScreen("quiz");
+    setQuizStep(0);
+    setScores({ insulin: 0, adrenal: 0, inflammatory: 0, postPill: 0 });
+    setPcosType(null);
+    setCompletedChapters(new Set());
+  };
+
   const type = PCOS_TYPES[pcosType];
 
   const goToChapter = (id) => { setActiveChapter(id); setDrawerOpen(false); if (typeof window !== "undefined") window.scrollTo(0, 0); };
@@ -271,7 +360,7 @@ export default function PCOSEbook() {
             </div>
             <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12, justifyContent: "center" }}>
               <button className="btn-primary" onClick={enterEbook} style={{ width: isMobile ? "100%" : "auto" }}>Enter Your Guide →</button>
-              <button className="btn-ghost" onClick={() => { setScreen("quiz"); setQuizStep(0); setScores({ insulin: 0, adrenal: 0, inflammatory: 0, postPill: 0 }); }} style={{ width: isMobile ? "100%" : "auto" }}>Retake Quiz</button>
+              <button className="btn-ghost" onClick={retakeQuiz} style={{ width: isMobile ? "100%" : "auto" }}>Retake Quiz</button>
             </div>
           </div>
         </div>
@@ -284,11 +373,11 @@ export default function PCOSEbook() {
           <div className={`overlay${drawerOpen ? " on" : ""}`} onClick={() => setDrawerOpen(false)} />
           {/* Mobile drawer */}
           <div className={`drawer${drawerOpen ? " on" : ""}`}>
-            <SidebarInner type={type} completedChapters={completedChapters} activeChapter={activeChapter} goToChapter={goToChapter} showClose onClose={() => setDrawerOpen(false)} />
+            <SidebarInner type={type} completedChapters={completedChapters} activeChapter={activeChapter} goToChapter={goToChapter} showClose onClose={() => setDrawerOpen(false)} onRetake={retakeQuiz} />
           </div>
           {/* Desktop sidebar */}
           <div className="desk-sidebar">
-            <SidebarInner type={type} completedChapters={completedChapters} activeChapter={activeChapter} goToChapter={goToChapter} />
+            <SidebarInner type={type} completedChapters={completedChapters} activeChapter={activeChapter} goToChapter={goToChapter} onRetake={retakeQuiz} />
           </div>
           {/* Content */}
           <div style={{ flex: 1, overflow: "auto", minWidth: 0 }} className="scrollbar">
@@ -317,7 +406,7 @@ export default function PCOSEbook() {
   );
 }
 
-function SidebarInner({ type, completedChapters, activeChapter, goToChapter, showClose, onClose }) {
+function SidebarInner({ type, completedChapters, activeChapter, goToChapter, showClose, onClose, onRetake }) {
   return (
     <div style={{ padding: "24px 18px", minHeight: "100%" }}>
       {showClose && (
@@ -357,6 +446,11 @@ function SidebarInner({ type, completedChapters, activeChapter, goToChapter, sho
       <div style={{ marginTop: 24, padding: "12px", background: "rgba(196,125,82,0.1)", borderRadius: 8, border: "1px solid rgba(196,125,82,0.2)" }}>
         <p style={{ fontSize: 12, fontFamily: "'Lato',sans-serif", color: "#C47D52", lineHeight: 1.6, margin: 0 }}>💛 You are not broken. Your body is asking for support — and you're giving it exactly that.</p>
       </div>
+      {onRetake && (
+        <button onClick={onRetake} style={{ marginTop: 16, width: "100%", background: "transparent", border: "1px solid #4A3828", borderRadius: 6, padding: "10px", fontSize: 12, fontFamily: "'Lato',sans-serif", color: "#9C8472", cursor: "pointer", textAlign: "center", letterSpacing: 1, textTransform: "uppercase", touchAction: "manipulation" }}>
+          ↺ Retake Quiz
+        </button>
+      )}
     </div>
   );
 }
@@ -405,6 +499,495 @@ function Ch2ActionBox() {
           </a>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── PLATE BUILDER DATA ────────────────────────────────────────────
+const PLATE_CATEGORIES = [
+  {
+    id: "veg", label: "Non-Starchy Vegetables", target: 50, color: "#4A8A5C", emoji: "🥦",
+    tip: "Fill half your plate — these stabilize blood sugar and reduce inflammation.",
+    foods: ["Spinach", "Broccoli", "Zucchini", "Bell Peppers", "Cauliflower", "Asparagus", "Kale", "Cucumber", "Arugula", "Brussels Sprouts", "Celery", "Mushrooms"],
+  },
+  {
+    id: "protein", label: "Quality Protein", target: 25, color: "#C47D52", emoji: "🥚",
+    tip: "Protein at every meal keeps insulin stable and supports egg quality.",
+    foods: ["Pasture-Raised Eggs", "Wild Salmon", "Organic Chicken", "Lentils", "Grass-Fed Beef", "Sardines", "Tempeh", "Turkey", "Shrimp", "Chickpeas", "Greek Yogurt", "Cottage Cheese"],
+  },
+  {
+    id: "carbs", label: "Low-Glycemic Carbs", target: 15, color: "#8B6BAE", emoji: "🍠",
+    tip: "Choose slow-burning carbs only — these won't spike insulin.",
+    foods: ["Sweet Potato", "Quinoa", "Brown Rice", "Oats", "Berries", "Chickpeas", "Lentils", "Black Beans", "Butternut Squash", "Plantain", "Buckwheat", "Barley"],
+  },
+  {
+    id: "fat", label: "Healthy Fats", target: 10, color: "#4A8FA3", emoji: "🥑",
+    tip: "Healthy fats support hormone production and reduce inflammation.",
+    foods: ["Avocado", "Olive Oil", "Walnuts", "Flaxseed", "Chia Seeds", "Coconut Oil", "Almonds", "Pumpkin Seeds", "Hemp Seeds", "Tahini", "Sunflower Seeds", "Macadamia Nuts"],
+  },
+];
+
+const TYPE_PLATE_TIPS = {
+  insulin: "Tip for your type: Add protein and fat to your plate BEFORE the carbs — this order significantly blunts the insulin spike.",
+  adrenal: "Tip for your type: Never skip a category — especially protein. Balanced meals prevent the blood sugar crashes that spike your cortisol.",
+  inflammatory: "Tip for your type: Prioritize salmon, walnuts, and flaxseed — their omega-3s directly counteract the inflammatory pathways driving your PCOS.",
+  postPill: "Tip for your type: Load up on cruciferous vegetables (broccoli, cauliflower, Brussels sprouts) — they support liver detox to clear synthetic hormones.",
+};
+
+function PlateBuilder({ pcosType }) {
+  const [selected, setSelected] = useState({ veg: [], protein: [], carbs: [], fat: [] });
+  const [customInputs, setCustomInputs] = useState({ veg: "", protein: "", carbs: "", fat: "" });
+  const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState("veg");
+
+  const toggleFood = (catId, food) => {
+    setSelected(prev => {
+      const curr = prev[catId];
+      return { ...prev, [catId]: curr.includes(food) ? curr.filter(f => f !== food) : [...curr, food] };
+    });
+  };
+
+  const addCustom = (catId) => {
+    const val = customInputs[catId].trim();
+    if (!val) return;
+    setSelected(prev => ({ ...prev, [catId]: [...prev[catId], val] }));
+    setCustomInputs(prev => ({ ...prev, [catId]: "" }));
+  };
+
+  const removeFood = (catId, food) => {
+    setSelected(prev => ({ ...prev, [catId]: prev[catId].filter(f => f !== food) }));
+  };
+
+  const totalFoods = Object.values(selected).flat().length;
+
+  // Score: each category contributes proportionally
+  const catScores = PLATE_CATEGORIES.map(cat => {
+    const count = selected[cat.id].length;
+    return count > 0 ? cat.target : 0;
+  });
+  const score = catScores.reduce((a, b) => a + b, 0);
+
+  const getScoreLabel = () => {
+    if (score >= 90) return { label: "PCOS Optimized ✨", color: "#4A8A5C" };
+    if (score >= 65) return { label: "Almost There 👍", color: "#C47D52" };
+    if (score >= 35) return { label: "Good Start 🌱", color: "#8B6BAE" };
+    return { label: "Keep Building 🍽️", color: "#9C8472" };
+  };
+
+  const copyMeal = () => {
+    const lines = PLATE_CATEGORIES.map(cat => {
+      const foods = selected[cat.id];
+      return foods.length ? `${cat.emoji} ${cat.label}: ${foods.join(", ")}` : null;
+    }).filter(Boolean).join("\n");
+    const text = `My PCOS Fertility Plate (Score: ${score}%)\n\n${lines}\n\nBuilt with The Holistic PCOS Guide`;
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); });
+  };
+
+  const clearAll = () => setSelected({ veg: [], protein: [], carbs: [], fat: [] });
+
+  const activeCat = PLATE_CATEGORIES.find(c => c.id === activeTab);
+
+  return (
+    <div style={{ background: "white", border: "1px solid #E8DDD2", borderRadius: 14, overflow: "hidden", marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg, #FDF3EC, #F5EDE4)", padding: "18px 20px", borderBottom: "1px solid #E8DDD2" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: "#2D2416", marginBottom: 3 }}>🍽️ PCOS Fertility Plate Builder</div>
+            <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 13, color: "#7A6452" }}>Build your meal — tap foods to add or type your own</div>
+          </div>
+          {/* Score */}
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 26, fontWeight: 700, fontFamily: "'Lato',sans-serif", color: getScoreLabel().color, lineHeight: 1 }}>{score}%</div>
+            <div style={{ fontSize: 12, fontFamily: "'Lato',sans-serif", color: getScoreLabel().color, fontWeight: 700 }}>{getScoreLabel().label}</div>
+          </div>
+        </div>
+        {/* Score bar */}
+        <div style={{ background: "#E8DDD2", borderRadius: 20, height: 8, marginTop: 12 }}>
+          <div style={{ width: `${score}%`, background: score >= 90 ? "#4A8A5C" : score >= 65 ? "#C47D52" : "#8B6BAE", borderRadius: 20, height: 8, transition: "width 0.4s ease" }} />
+        </div>
+      </div>
+
+      {/* Category tabs */}
+      <div style={{ display: "flex", borderBottom: "1px solid #E8DDD2", overflowX: "auto" }}>
+        {PLATE_CATEGORIES.map(cat => (
+          <button key={cat.id} onClick={() => setActiveTab(cat.id)}
+            style={{ flex: 1, minWidth: 80, padding: "11px 8px", border: "none", cursor: "pointer", fontFamily: "'Lato',sans-serif", fontSize: 12, fontWeight: 700, background: activeTab === cat.id ? cat.color : "white", color: activeTab === cat.id ? "white" : "#7A6452", borderBottom: activeTab === cat.id ? `3px solid ${cat.color}` : "3px solid transparent", transition: "all 0.15s", touchAction: "manipulation", textAlign: "center", lineHeight: 1.3 }}>
+            <div style={{ fontSize: 16, marginBottom: 2 }}>{cat.emoji}</div>
+            <div>{cat.target}%</div>
+            {selected[cat.id].length > 0 && <div style={{ fontSize: 10, opacity: 0.9 }}>({selected[cat.id].length})</div>}
+          </button>
+        ))}
+      </div>
+
+      {/* Active category content */}
+      <div style={{ padding: "16px 18px" }}>
+        <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 12, color: activeCat.color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{activeCat.label}</div>
+        <p style={{ fontFamily: "'Lato',sans-serif", fontSize: 13, color: "#7A6452", marginBottom: 14, lineHeight: 1.6 }}>{activeCat.tip}</p>
+
+        {/* Food chips */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          {activeCat.foods.map(food => {
+            const isSelected = selected[activeCat.id].includes(food);
+            return (
+              <button key={food} onClick={() => toggleFood(activeCat.id, food)}
+                style={{ padding: "7px 14px", borderRadius: 20, border: `2px solid ${isSelected ? activeCat.color : "#E8DDD2"}`, background: isSelected ? activeCat.color : "white", color: isSelected ? "white" : "#5A4433", fontSize: 13, fontFamily: "'Lato',sans-serif", fontWeight: isSelected ? 700 : 400, cursor: "pointer", transition: "all 0.15s", touchAction: "manipulation" }}>
+                {isSelected ? "✓ " : ""}{food}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Custom food input */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+          <input
+            value={customInputs[activeCat.id]}
+            onChange={e => setCustomInputs(prev => ({ ...prev, [activeCat.id]: e.target.value }))}
+            onKeyDown={e => e.key === "Enter" && addCustom(activeCat.id)}
+            placeholder="Add your own food..."
+            style={{ flex: 1, padding: "9px 14px", border: "2px solid #E8DDD2", borderRadius: 8, fontFamily: "'Lato',sans-serif", fontSize: 14, color: "#2D2416", outline: "none", background: "#FAFAF8" }}
+          />
+          <button onClick={() => addCustom(activeCat.id)}
+            style={{ padding: "9px 16px", background: activeCat.color, color: "white", border: "none", borderRadius: 8, fontFamily: "'Lato',sans-serif", fontSize: 13, fontWeight: 700, cursor: "pointer", touchAction: "manipulation" }}>
+            + Add
+          </button>
+        </div>
+        <p style={{ fontFamily: "'Lato',sans-serif", fontSize: 12, color: "#B0A090", fontStyle: "italic" }}>Press Enter or tap Add to include a food not on the list</p>
+      </div>
+
+      {/* Your plate summary */}
+      {totalFoods > 0 && (
+        <div style={{ borderTop: "1px solid #E8DDD2", padding: "16px 18px", background: "#FAFAF8" }}>
+          <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 12, fontWeight: 700, color: "#B06E4A", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>Your Plate</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            {PLATE_CATEGORIES.map(cat => {
+              const foods = selected[cat.id];
+              if (!foods.length) return null;
+              return (
+                <div key={cat.id} style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <span style={{ fontSize: 14, flexShrink: 0 }}>{cat.emoji}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 11, fontWeight: 700, color: cat.color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{cat.label}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {foods.map(f => (
+                        <span key={f} style={{ background: `${cat.color}18`, border: `1px solid ${cat.color}40`, borderRadius: 12, padding: "3px 10px", fontSize: 12, fontFamily: "'Lato',sans-serif", color: "#3D2E1E", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          {f}
+                          <button onClick={() => removeFood(cat.id, f)} style={{ background: "none", border: "none", cursor: "pointer", color: cat.color, fontSize: 13, padding: 0, lineHeight: 1, fontWeight: 700 }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* PCOS type tip */}
+          {pcosType && TYPE_PLATE_TIPS[pcosType.id] && (
+            <div style={{ background: `${pcosType.color}12`, border: `1px solid ${pcosType.color}30`, borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+              <p style={{ fontFamily: "'Lato',sans-serif", fontSize: 13, color: "#3D2E1E", margin: 0, lineHeight: 1.6 }}>
+                {pcosType.emoji} {TYPE_PLATE_TIPS[pcosType.id]}
+              </p>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={copyMeal}
+              style={{ background: copied ? "#4A8A5C" : "#B06E4A", color: "white", border: "none", borderRadius: 6, padding: "9px 18px", fontSize: 13, fontFamily: "'Lato',sans-serif", fontWeight: 700, cursor: "pointer", touchAction: "manipulation" }}>
+              {copied ? "✓ Copied!" : "📋 Copy My Plate"}
+            </button>
+            <button onClick={clearAll}
+              style={{ background: "transparent", color: "#9C8472", border: "1px solid #E8DDD2", borderRadius: 6, padding: "9px 18px", fontSize: 13, fontFamily: "'Lato',sans-serif", cursor: "pointer", touchAction: "manipulation" }}>
+              Clear All
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SUPPLEMENT STACK BUILDER DATA ────────────────────────────────
+const SYMPTOM_OPTIONS = [
+  { id: "irregular", label: "Irregular or absent periods", emoji: "📅" },
+  { id: "acne", label: "Acne or oily skin", emoji: "🫦" },
+  { id: "hairloss", label: "Hair thinning or loss", emoji: "💇‍♀️" },
+  { id: "fatigue", label: "Fatigue and low energy", emoji: "😴" },
+  { id: "cravings", label: "Sugar or carb cravings", emoji: "🍬" },
+  { id: "bloating", label: "Bloating or digestive issues", emoji: "🫃" },
+  { id: "anxiety", label: "Anxiety or mood swings", emoji: "🌀" },
+  { id: "weightgain", label: "Difficulty losing weight", emoji: "⚖️" },
+  { id: "sleep", label: "Poor sleep or insomnia", emoji: "🌙" },
+  { id: "inflammation", label: "Headaches, joint pain, or body aches", emoji: "🔥" },
+  { id: "lowlibido", label: "Low libido or low mood", emoji: "💔" },
+  { id: "eggquality", label: "Concerned about egg quality", emoji: "🥚" },
+];
+
+const SUPPLEMENT_DB = [
+  {
+    name: "Myo-Inositol + D-Chiro Inositol (40:1)",
+    icon: "⭐", priority: "Essential",
+    priorityColor: "#B06E4A",
+    symptoms: ["irregular", "cravings", "weightgain", "eggquality"],
+    pcosTypes: ["insulin", "adrenal", "inflammatory", "postPill"],
+    why: "The most researched PCOS supplement. Restores ovulation, improves egg quality, and directly addresses insulin resistance.",
+    dose: "4g Myo-Inositol + 100mg D-Chiro Inositol daily, in two divided doses",
+    timing: "Morning + Evening",
+  },
+  {
+    name: "Methylfolate (B9)",
+    icon: "🧬", priority: "Essential",
+    priorityColor: "#B06E4A",
+    symptoms: ["irregular", "eggquality", "fatigue"],
+    pcosTypes: ["insulin", "adrenal", "inflammatory", "postPill"],
+    why: "Non-negotiable pre-conception nutrient. Critical for egg quality, neural tube development, and cell division from the moment of conception.",
+    dose: "400–800mcg daily",
+    timing: "Morning with food",
+  },
+  {
+    name: "Vitamin D3 + K2",
+    icon: "☀️", priority: "Essential",
+    priorityColor: "#B06E4A",
+    symptoms: ["irregular", "fatigue", "weightgain", "eggquality", "lowlibido"],
+    pcosTypes: ["insulin", "adrenal", "inflammatory", "postPill"],
+    why: "85%+ of women with PCOS are deficient. Vitamin D directly regulates ovarian function and insulin signaling.",
+    dose: "2,000–5,000 IU D3 + 100mcg K2 daily",
+    timing: "Morning with fat-containing meal",
+  },
+  {
+    name: "Magnesium Glycinate",
+    icon: "🌙", priority: "Highly Recommended",
+    priorityColor: "#8B6BAE",
+    symptoms: ["sleep", "anxiety", "cravings", "fatigue", "inflammation"],
+    pcosTypes: ["insulin", "adrenal", "inflammatory", "postPill"],
+    why: "Calms the nervous system, reduces cortisol, improves sleep quality, and enhances insulin sensitivity.",
+    dose: "300–400mg glycinate form nightly",
+    timing: "30–60 min before bed",
+  },
+  {
+    name: "Omega-3 Fatty Acids (EPA + DHA)",
+    icon: "🐟", priority: "Highly Recommended",
+    priorityColor: "#8B6BAE",
+    symptoms: ["inflammation", "eggquality", "acne", "weightgain", "lowlibido"],
+    pcosTypes: ["inflammatory", "insulin", "adrenal", "postPill"],
+    why: "Reduces systemic inflammation, lowers androgens, improves egg quality, and supports fetal brain development.",
+    dose: "2–3g combined EPA+DHA daily",
+    timing: "With meals",
+  },
+  {
+    name: "N-Acetyl Cysteine (NAC)",
+    icon: "🔬", priority: "Highly Recommended",
+    priorityColor: "#8B6BAE",
+    symptoms: ["irregular", "weightgain", "eggquality", "cravings", "inflammation"],
+    pcosTypes: ["insulin", "inflammatory"],
+    why: "Powerful antioxidant that improves insulin sensitivity, reduces androgens, and improves ovulation rates.",
+    dose: "600mg 2–3x daily with meals",
+    timing: "With meals",
+  },
+  {
+    name: "Ashwagandha KSM-66",
+    icon: "🌿", priority: "Highly Recommended",
+    priorityColor: "#8B6BAE",
+    symptoms: ["anxiety", "fatigue", "sleep", "lowlibido", "irregular"],
+    pcosTypes: ["adrenal", "postPill"],
+    why: "Adaptogen that directly lowers cortisol, reduces anxiety, and supports adrenal recovery — critical for Adrenal PCOS.",
+    dose: "600mg daily",
+    timing: "Morning or evening",
+  },
+  {
+    name: "Vitex (Chaste Tree Berry)",
+    icon: "🌸", priority: "Highly Recommended",
+    priorityColor: "#8B6BAE",
+    symptoms: ["irregular", "lowlibido", "anxiety", "acne"],
+    pcosTypes: ["postPill", "adrenal"],
+    why: "Re-regulates the LH/FSH ratio after stopping birth control. Helps restore natural cycle rhythm in Post-Pill PCOS.",
+    dose: "400mg daily",
+    timing: "Morning — do NOT combine with Clomid",
+  },
+  {
+    name: "Berberine",
+    icon: "🍃", priority: "Highly Recommended",
+    priorityColor: "#8B6BAE",
+    symptoms: ["cravings", "weightgain", "irregular", "fatigue"],
+    pcosTypes: ["insulin"],
+    why: "Natural Metformin alternative. Improves insulin sensitivity, lowers blood sugar, and supports weight management.",
+    dose: "500mg 2–3x daily with meals",
+    timing: "With meals",
+  },
+  {
+    name: "Zinc",
+    icon: "⚡", priority: "Add When Ready",
+    priorityColor: "#4A8FA3",
+    symptoms: ["acne", "hairloss", "lowlibido", "eggquality"],
+    pcosTypes: ["postPill", "inflammatory", "insulin"],
+    why: "Often severely depleted by the pill. Supports hair growth, clears hormonal acne, and improves egg quality.",
+    dose: "30mg daily",
+    timing: "With food — take away from iron",
+  },
+  {
+    name: "Curcumin + Bioperine",
+    icon: "🟡", priority: "Add When Ready",
+    priorityColor: "#4A8FA3",
+    symptoms: ["inflammation", "acne", "bloating", "fatigue"],
+    pcosTypes: ["inflammatory"],
+    why: "Potent anti-inflammatory that reduces CRP, lowers androgen levels, and supports gut health.",
+    dose: "500–1000mg daily with Bioperine for absorption",
+    timing: "With meals",
+  },
+  {
+    name: "Probiotics (Multi-Strain)",
+    icon: "🦠", priority: "Add When Ready",
+    priorityColor: "#4A8FA3",
+    symptoms: ["bloating", "inflammation", "acne", "anxiety"],
+    pcosTypes: ["inflammatory", "postPill"],
+    why: "Heals gut dysbiosis that drives inflammation and hormone disruption. Supports estrogen metabolism.",
+    dose: "10–50 billion CFU, multi-strain",
+    timing: "Morning on empty stomach or with first meal",
+  },
+  {
+    name: "B-Complex (Methylated)",
+    icon: "💊", priority: "Add When Ready",
+    priorityColor: "#4A8FA3",
+    symptoms: ["fatigue", "anxiety", "hairloss", "lowlibido"],
+    pcosTypes: ["postPill", "adrenal"],
+    why: "Replenishes B vitamins depleted by hormonal birth control. Supports energy, mood, and nervous system function.",
+    dose: "1 methylated B-complex capsule daily",
+    timing: "Morning with food",
+  },
+];
+
+function SupplementStackBuilder({ pcosType }) {
+  const [selectedSymptoms, setSelectedSymptoms] = useState([]);
+  const [showResults, setShowResults] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const toggleSymptom = (id) => {
+    setSelectedSymptoms(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
+  };
+
+  const getRecommendations = () => {
+    if (!selectedSymptoms.length) return [];
+    return SUPPLEMENT_DB
+      .filter(supp => {
+        const symptomMatch = supp.symptoms.some(s => selectedSymptoms.includes(s));
+        const typeMatch = !pcosType || supp.pcosTypes.includes(pcosType.id);
+        return symptomMatch && typeMatch;
+      })
+      .sort((a, b) => {
+        const order = { "Essential": 0, "Highly Recommended": 1, "Add When Ready": 2 };
+        return order[a.priority] - order[b.priority];
+      });
+  };
+
+  const recommendations = getRecommendations();
+
+  const copyStack = () => {
+    const lines = recommendations.map((s, i) =>
+      `${i + 1}. ${s.name}\n   Dose: ${s.dose}\n   Timing: ${s.timing}\n   Priority: ${s.priority}`
+    ).join("\n\n");
+    const text = `My PCOS Supplement Stack\n${"─".repeat(30)}\n\n${lines}\n\n⚠️ Always consult your healthcare provider before starting supplements.\nBuilt with The Holistic PCOS Guide`;
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); });
+  };
+
+  const reset = () => { setSelectedSymptoms([]); setShowResults(false); };
+
+  return (
+    <div style={{ background: "white", border: "1px solid #E8DDD2", borderRadius: 14, overflow: "hidden", marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg, #F3EEF8, #EDE8F2)", padding: "16px 20px", borderBottom: "1px solid #E8DDD2" }}>
+        <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: "#2D2416", marginBottom: 3 }}>🧪 Supplement Stack Builder</div>
+        <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 13, color: "#7A6452" }}>
+          Select your symptoms → get your personalized protocol
+          {pcosType && <span style={{ color: pcosType.color, fontWeight: 700 }}> · Optimized for {pcosType.name}</span>}
+        </div>
+      </div>
+
+      {!showResults ? (
+        <div style={{ padding: "18px 20px" }}>
+          <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 12, fontWeight: 700, color: "#8B6BAE", textTransform: "uppercase", letterSpacing: 1, marginBottom: 14 }}>
+            Select all symptoms you're currently experiencing:
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+            {SYMPTOM_OPTIONS.map(sym => {
+              const isSelected = selectedSymptoms.includes(sym.id);
+              return (
+                <button key={sym.id} onClick={() => toggleSymptom(sym.id)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", border: `2px solid ${isSelected ? "#8B6BAE" : "#E8DDD2"}`, borderRadius: 10, background: isSelected ? "#F3EEF8" : "white", cursor: "pointer", textAlign: "left", fontFamily: "'Lato',sans-serif", fontSize: 13, color: "#2D2416", transition: "all 0.15s", touchAction: "manipulation", fontWeight: isSelected ? 700 : 400 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>{sym.emoji}</span>
+                  <span style={{ lineHeight: 1.3 }}>{sym.label}</span>
+                  {isSelected && <span style={{ marginLeft: "auto", color: "#8B6BAE", fontSize: 14, flexShrink: 0 }}>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => setShowResults(true)}
+            disabled={!selectedSymptoms.length}
+            style={{ width: "100%", padding: "13px", background: selectedSymptoms.length ? "#8B6BAE" : "#E8DDD2", color: selectedSymptoms.length ? "white" : "#9C8472", border: "none", borderRadius: 8, fontFamily: "'Lato',sans-serif", fontSize: 14, fontWeight: 700, cursor: selectedSymptoms.length ? "pointer" : "default", letterSpacing: 1, touchAction: "manipulation", transition: "background 0.2s" }}>
+            {selectedSymptoms.length ? `Build My Stack (${selectedSymptoms.length} symptom${selectedSymptoms.length > 1 ? "s" : ""} selected) →` : "Select at least one symptom to continue"}
+          </button>
+        </div>
+      ) : (
+        <div style={{ padding: "18px 20px" }}>
+          {/* Selected symptoms recap */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 11, fontWeight: 700, color: "#8B6BAE", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Based on your symptoms</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {selectedSymptoms.map(id => {
+                const sym = SYMPTOM_OPTIONS.find(s => s.id === id);
+                return (
+                  <span key={id} style={{ background: "#F3EEF8", border: "1px solid #8B6BAE40", borderRadius: 20, padding: "4px 12px", fontSize: 12, fontFamily: "'Lato',sans-serif", color: "#8B6BAE", fontWeight: 700 }}>
+                    {sym.emoji} {sym.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          {recommendations.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "24px", color: "#9C8472", fontFamily: "'Lato',sans-serif", fontSize: 14 }}>
+              No specific matches found. Try selecting more symptoms or check the full supplement list above.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontFamily: "'Lato',sans-serif", fontSize: 12, fontWeight: 700, color: "#2D2416", textTransform: "uppercase", letterSpacing: 1, marginBottom: 14 }}>
+                Your Personalized Stack — {recommendations.length} supplement{recommendations.length > 1 ? "s" : ""}
+              </div>
+              {recommendations.map((supp, i) => (
+                <div key={i} style={{ background: "#FAFAF8", border: "1px solid #E8DDD2", borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 18 }}>{supp.icon}</span>
+                      <span style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#2D2416", lineHeight: 1.3 }}>{supp.name}</span>
+                    </div>
+                    <span style={{ fontSize: 11, fontFamily: "'Lato',sans-serif", background: `${supp.priorityColor}15`, color: supp.priorityColor, border: `1px solid ${supp.priorityColor}30`, borderRadius: 20, padding: "3px 10px", fontWeight: 700, whiteSpace: "nowrap" }}>{supp.priority}</span>
+                  </div>
+                  <p style={{ fontFamily: "'Lato',sans-serif", fontSize: 13, lineHeight: 1.7, color: "#3D2E1E", marginBottom: 10 }}>{supp.why}</p>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ background: "#F0EAE0", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "'Lato',sans-serif", color: "#5A4433" }}>💊 {supp.dose}</span>
+                    <span style={{ background: "#F0EAE0", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontFamily: "'Lato',sans-serif", color: "#5A4433" }}>⏰ {supp.timing}</span>
+                  </div>
+                </div>
+              ))}
+
+              <div style={{ background: "#FDF3EC", border: "1px solid #E8DDD2", borderRadius: 8, padding: "12px 14px", margin: "14px 0" }}>
+                <p style={{ fontFamily: "'Lato',sans-serif", fontSize: 12, color: "#7A6452", lineHeight: 1.6, margin: 0 }}>⚠️ Always consult your healthcare provider before starting any supplement protocol, especially if you are taking medications.</p>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={copyStack}
+                  style={{ background: copied ? "#4A8A5C" : "#8B6BAE", color: "white", border: "none", borderRadius: 6, padding: "10px 18px", fontSize: 13, fontFamily: "'Lato',sans-serif", fontWeight: 700, cursor: "pointer", touchAction: "manipulation" }}>
+                  {copied ? "✓ Copied!" : "📋 Copy My Stack"}
+                </button>
+                <button onClick={reset}
+                  style={{ background: "transparent", color: "#9C8472", border: "1px solid #E8DDD2", borderRadius: 6, padding: "10px 18px", fontSize: 13, fontFamily: "'Lato',sans-serif", cursor: "pointer", touchAction: "manipulation" }}>
+                  ↺ Start Over
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -492,20 +1075,9 @@ function ChapterContent({ chapterId, pcosType, isMobile, onComplete, onNext }) {
       <p>Food is not just fuel for women with PCOS — it is medicine. The goal is to eat in a way that stabilizes blood sugar, reduces inflammation, lowers androgens, and creates a fertile internal environment.</p>
       <h3>How Food Affects Your Hormones</h3>
       <p>When you eat high-glycemic foods — white bread, sugar, processed carbs — your blood sugar spikes. Your pancreas releases insulin to bring it back down. In women with PCOS, this process is impaired, leading to chronically elevated insulin. That excess insulin tells your ovaries to make more testosterone — which disrupts ovulation. No ovulation = no pregnancy.</p>
-      <h3>The PCOS Fertility Plate</h3>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, margin: "18px 0" }}>
-        {[
-          { label: "50% Non-Starchy Vegetables", color: "#4A8A5C", items: "Leafy greens, broccoli, zucchini, bell peppers, cauliflower, asparagus" },
-          { label: "25% Quality Protein", color: "#C47D52", items: "Pasture-raised eggs, wild salmon, organic chicken, lentils, grass-fed beef" },
-          { label: "15% Low-Glycemic Carbs", color: "#8B6BAE", items: "Quinoa, sweet potato, brown rice, oats, chickpeas, berries" },
-          { label: "10% Healthy Fats", color: "#4A8FA3", items: "Avocado, olive oil, walnuts, flaxseed, chia seeds, coconut oil" },
-        ].map(p => (
-          <div key={p.label} style={{ background: "white", border: `2px solid ${p.color}30`, borderRadius: 10, padding: 14 }}>
-            <div style={{ fontSize: 12, fontFamily: "'Lato',sans-serif", fontWeight: 700, color: p.color, marginBottom: 7 }}>{p.label}</div>
-            <p className="sans" style={{ fontSize: 13, color: "#5A4433", margin: 0, lineHeight: 1.6 }}>{p.items}</p>
-          </div>
-        ))}
-      </div>
+      <h3>The PCOS Fertility Plate Builder</h3>
+      <p>Use this interactive tool to build a PCOS-optimized meal. Add foods from each category — or type in your own. Watch your plate score update in real time.</p>
+      <PlateBuilder pcosType={type} />
       <h3>What to Avoid or Minimize</h3>
       <ul>
         <li><strong>Refined sugar and high-fructose corn syrup</strong> — directly raises insulin and androgens</li>
@@ -571,6 +1143,9 @@ function ChapterContent({ chapterId, pcosType, isMobile, onComplete, onNext }) {
       <div style={{ background: "#FDF3EC", border: "1px solid #E8DDD2", borderRadius: 10, padding: "14px 16px", margin: "18px 0" }}>
         <p className="sans" style={{ fontSize: 13, color: "#7A6452", lineHeight: 1.7, margin: 0 }}><strong>⚠️ Important:</strong> Always consult with your healthcare provider before starting a supplement protocol, especially if you are taking medications or have other health conditions.</p>
       </div>
+      <h3>🧪 Build Your Personal Supplement Stack</h3>
+      <p>Select the symptoms you're currently experiencing. The tool will build a prioritized supplement protocol matched to your specific needs and PCOS type.</p>
+      <SupplementStackBuilder pcosType={type} />
       <div className="abox">
         <h4>✏️ Your Action Step for Chapter 3</h4>
         <p className="sans" style={{ fontSize: 15, margin: 0, lineHeight: 1.75 }}>Identify your top 3 supplements based on your PCOS type. Order them this week and commit to 90 days of consistent use. Set a phone reminder to take them daily.</p>
